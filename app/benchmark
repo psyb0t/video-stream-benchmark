@@ -1,0 +1,74 @@
+#!/usr/bin/env python3
+import subprocess
+import sys
+import os
+import signal
+import time
+import logging
+import json
+
+logging.basicConfig(stream=sys.stdout, level=logging.INFO,
+                    format='%(asctime)s %(levelname)s %(message)s',
+                    datefmt='%Y-%m-%d %H:%M:%S')
+
+if len(sys.argv) != 4:
+    sys.exit('USAGE: benchmark [connection_length] [connection_num] [benchmark_url]')
+
+connection_length = int(sys.argv[1])
+connection_num = int(sys.argv[2])
+benchmark_url = sys.argv[3]
+
+
+def ms_time():
+    return int(round(time.time() * 1000))
+
+
+logging.info('Benchmarking %s with %s concurrent connections, each lasting %s seconds...' % (
+    benchmark_url, connection_num, connection_length))
+
+start_time = ms_time()
+processes = []
+
+for i in range(connection_num):
+    process = subprocess.Popen(
+        'ffmpeg -hide_banner -v quiet -nostats -y -i {input} -ss {conn_length} -timeout {conn_length} -stimeout {conn_length_ms} -c copy -vframes 1 -f null /dev/null'.format(
+            input=benchmark_url,
+            conn_length=connection_length,
+            conn_length_ms=connection_length * 1000
+        ), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, shell=True
+    )
+
+    processes.append({
+        'proc': process,
+        'start_ts': time.time()
+    })
+
+for process in processes:
+    while process['proc'].poll() is None:
+        if time.time() - process['start_ts'] > (connection_length * 2):
+            os.kill(process['proc'].pid, signal.SIGTERM)
+
+        time.sleep(0.0001)
+
+elapsed_time = ms_time() - start_time
+
+success_count = 0
+error_count = 0
+
+for process in processes:
+    if process['proc'].returncode == 0:
+        success_count += 1
+        continue
+
+    error_count += 1
+
+benchmark_results = {
+    'benchmark_url': benchmark_url,
+    'connection_length': connection_length,
+    'connection_number': connection_num,
+    'elapsed_time': '%dms' % elapsed_time,
+    'success_count': success_count,
+    'error_count': error_count
+}
+
+logging.info('Benchmark ended\n%s\n' % json.dumps(benchmark_results, indent=2))
